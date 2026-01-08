@@ -4,7 +4,6 @@ use module_system::Handler;
 impl Operation {
     // Add any methods you need.
     fn transform(&self,other :Operation) -> Operation {
-
         let result_action = match (&self.action,&other.action) {
             (Action::Insert { idx: i1, ch: c1 }, Action::Insert { idx: i2, ch: c2 }) => {
                 if i1<i2 || (i1==i2 && self.process_rank<other.process_rank){
@@ -57,6 +56,9 @@ pub(crate) struct Process<const N: usize> {
     /// Reference to the process's client.
     client: Box<dyn ClientRef>,
     // Add any fields you need.
+    current_round: u64,
+    log: Vec<Operation>,
+    queue: Vec<Operation>,
 }
 
 impl<const N: usize> Process<N> {
@@ -70,6 +72,9 @@ impl<const N: usize> Process<N> {
             broadcast,
             client,
             // Add any fields you need.
+            current_round: 0,
+            log: Vec::new(),
+            queue: Vec::new(),
         }
     }
 
@@ -79,13 +84,30 @@ impl<const N: usize> Process<N> {
 #[async_trait::async_trait]
 impl<const N: usize> Handler<Operation> for Process<N> {
     async fn handle(&mut self, msg: Operation) {
-        todo!("Handle operation issued by other process.");
+        // todo!("Handle operation issued by other process.");
     }
 }
 
 #[async_trait::async_trait]
 impl<const N: usize> Handler<EditRequest> for Process<N> {
     async fn handle(&mut self, request: EditRequest) {
-        todo!("Handle edit request from the client.");
+
+        let mut temp_operation = Operation{
+            action: request.action,
+            process_rank: N+1,
+        };
+
+        let start = (request.num_applied).min(self.log.len());
+
+        for op in &self.log[start..] {
+            temp_operation = temp_operation.transform(op.clone());
+        }
+        
+        temp_operation.process_rank = self.rank;  
+        self.log.push(temp_operation.clone());
+        self.broadcast.send(temp_operation.clone()).await;
+        self.client.send(Edit { 
+            action: temp_operation.action,
+        }).await;
     }
 }
