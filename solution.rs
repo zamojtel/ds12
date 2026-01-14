@@ -59,6 +59,7 @@ pub(crate) struct Process<const N: usize> {
     current_round: u64,
     log: Vec<Operation>,
     queue: Vec<Operation>,
+    pending_requests: Vec<EditRequest>,
 }
 
 impl<const N: usize> Process<N> {
@@ -75,10 +76,31 @@ impl<const N: usize> Process<N> {
             current_round: 0,
             log: Vec::new(),
             queue: Vec::new(),
+            pending_requests: Vec::new(),
         }
     }
 
     // Add any methods you need.
+
+    async fn perform_edit_request(&mut self, request: EditRequest) {
+        let mut temp_operation = Operation {
+            action: request.action,
+            process_rank: N + 1,
+        };
+
+        let start = (request.num_applied).min(self.log.len());
+        for op in &self.log[start..] {
+            temp_operation = temp_operation.transform(op.clone());
+        }
+        
+        temp_operation.process_rank = self.rank;  
+        self.log.push(temp_operation.clone());
+        self.broadcast.send(temp_operation.clone()).await;
+        self.client.send(Edit { 
+            action: temp_operation.action,
+        }).await;
+    }
+
 }
 
 #[async_trait::async_trait]
@@ -164,66 +186,16 @@ impl<const N: usize> Handler<Operation> for Process<N> {
         } else {
             // ignore old messages
         }
-        // if msg_round > my_round{
-        //     self.queue.push(msg);
-        // }else if msg_round == my_round {
-        //     let mut temp_msg = msg;
-        //     let start = my_round * N;
-            
-        //     for op in &self.log[start..] {
-        //         temp_msg = temp_msg.transform(op.clone());
-        //     }
-
-        //     self.log.push(temp_msg);
-        //     let mut i =0;
-        //     while i < self.queue.len() {
-        //         let mut current_msg_round = 0;
-        //         let current_msg = self.queue[i].clone();
-
-        //         for l in &self.log {
-        //             if current_msg.process_rank == l.process_rank{
-        //                 current_msg_round+=1;   
-        //             }
-        //         }
-        //         if current_msg_round == self.log.len() /N {
-        //             let mut valid_msg = self.queue.remove(i);
-        //             let start = current_msg_round * N;
-            
-        //             for op in &self.log[start..] {
-        //                 valid_msg = valid_msg.transform(op.clone());
-        //             }
-
-        //             self.log.push(valid_msg);
-        //         }else{
-        //             i+=1;
-        //         }
-        //     }
-        // }else{
-        //     // we ignore the message
-        // }
     }
 }
 
 #[async_trait::async_trait]
 impl<const N: usize> Handler<EditRequest> for Process<N> {
-    async fn handle(&mut self, request: EditRequest) {
-
-        let mut temp_operation = Operation{
-            action: request.action,
-            process_rank: N+1,
-        };
-
-        let start = (request.num_applied).min(self.log.len());
-
-        for op in &self.log[start..] {
-            temp_operation = temp_operation.transform(op.clone());
+  async fn handle(&mut self, request: EditRequest) {
+        if self.log.len() % N == 0 {
+            self.perform_edit_request(request).await;
+        } else {
+            self.pending_requests.push(request);
         }
-        
-        temp_operation.process_rank = self.rank;  
-        self.log.push(temp_operation.clone());
-        self.broadcast.send(temp_operation.clone()).await;
-        self.client.send(Edit { 
-            action: temp_operation.action,
-        }).await;
     }
 }
