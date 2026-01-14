@@ -56,7 +56,7 @@ pub(crate) struct Process<const N: usize> {
     /// Reference to the process's client.
     client: Box<dyn ClientRef>,
     // Add any fields you need.
-    current_round: u64,
+    _current_round: u64,
     log: Vec<Operation>,
     queue: Vec<Operation>,
     pending_requests: Vec<EditRequest>,
@@ -73,7 +73,7 @@ impl<const N: usize> Process<N> {
             broadcast,
             client,
             // Add any fields you need.
-            current_round: 0,
+            _current_round: 0,
             log: Vec::new(),
             queue: Vec::new(),
             pending_requests: Vec::new(),
@@ -81,7 +81,6 @@ impl<const N: usize> Process<N> {
     }
 
     // Add any methods you need.
-
     async fn perform_edit_request(&mut self, request: EditRequest) {
         let mut temp_operation = Operation {
             action: request.action,
@@ -90,10 +89,6 @@ impl<const N: usize> Process<N> {
 
         let start = (request.num_applied).min(self.log.len());
         for op in &self.log[start..] {
-
-            if op.process_rank == self.rank {
-                continue;
-            }
             temp_operation = temp_operation.transform(op.clone());
         }
         
@@ -104,7 +99,6 @@ impl<const N: usize> Process<N> {
             action: temp_operation.action,
         }).await;
     }
-
 }
 
 #[async_trait::async_trait]
