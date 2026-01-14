@@ -92,28 +92,62 @@ impl<const N: usize> Handler<Operation> for Process<N> {
             }
         }
 
-        if msg_round > my_round{
+        if msg_round > my_round {
             self.queue.push(msg);
-        }else if msg_round == my_round {
+        } else if msg_round == my_round {
+            // --- POPRAWKA: AUTONOMICZNY NOP ---
+            // Sprawdzamy, czy to początek rundy. Jeśli tak (log.len % N == 0),
+            // to znaczy, że nie daliśmy jeszcze swojej operacji.
+            // Ponieważ obsługujemy właśnie cudzą operację (msg), musimy najpierw
+            // wygenerować i wysłać nasz NOP, żeby zachować kolejność w logu.
+            if self.log.len() % N == 0 {
+                let nop = Operation {
+                    action: Action::Nop,
+                    process_rank: self.rank,
+                };
+                self.log.push(nop.clone());
+                self.broadcast.send(nop).await;
+            }
+            // ----------------------------------
+
             let mut temp_msg = msg;
-            let start = my_round * N;
+            let start = my_round * N; // Teraz to start może wskazywać na nasz nowo dodany NOP
             
             for op in &self.log[start..] {
                 temp_msg = temp_msg.transform(op.clone());
             }
 
             self.log.push(temp_msg);
-            let mut i =0;
+
+            // Obsługa kolejki (tutaj też musimy pamiętać o NOP!)
+            let mut i = 0;
             while i < self.queue.len() {
                 let mut current_msg_round = 0;
                 let current_msg = self.queue[i].clone();
 
                 for l in &self.log {
-                    if current_msg.process_rank == l.process_rank{
-                        current_msg_round+=1;   
+                    if current_msg.process_rank == l.process_rank {
+                        current_msg_round += 1;   
                     }
                 }
-                if current_msg_round == self.log.len() /N {
+
+                // Sprawdzamy, czy wiadomość z kolejki pasuje do AKTUALNEJ rundy
+                // (która mogła się zmienić przez dodanie poprzednich wiadomości)
+                if current_msg_round == self.log.len() / N {
+                    
+                    // --- POPRAWKA DLA KOLEJKI: AUTONOMICZNY NOP ---
+                    // Ta sama logika: wyciągamy coś z kolejki dla nowej rundy,
+                    // ale jeśli jeszcze nie daliśmy swojego wpisu, robimy NOP.
+                    if self.log.len() % N == 0 {
+                        let nop = Operation {
+                            action: Action::Nop,
+                            process_rank: self.rank,
+                        };
+                        self.log.push(nop.clone());
+                        self.broadcast.send(nop).await;
+                    }
+                    // ---------------------------------------------
+
                     let mut valid_msg = self.queue.remove(i);
                     let start = current_msg_round * N;
             
@@ -122,13 +156,51 @@ impl<const N: usize> Handler<Operation> for Process<N> {
                     }
 
                     self.log.push(valid_msg);
-                }else{
-                    i+=1;
+                    // Nie inkrementujemy 'i', bo usunęliśmy element i wszystko się przesunęło
+                } else {
+                    i += 1;
                 }
             }
-        }else{
-            // we ignore the message
+        } else {
+            // ignore old messages
         }
+        // if msg_round > my_round{
+        //     self.queue.push(msg);
+        // }else if msg_round == my_round {
+        //     let mut temp_msg = msg;
+        //     let start = my_round * N;
+            
+        //     for op in &self.log[start..] {
+        //         temp_msg = temp_msg.transform(op.clone());
+        //     }
+
+        //     self.log.push(temp_msg);
+        //     let mut i =0;
+        //     while i < self.queue.len() {
+        //         let mut current_msg_round = 0;
+        //         let current_msg = self.queue[i].clone();
+
+        //         for l in &self.log {
+        //             if current_msg.process_rank == l.process_rank{
+        //                 current_msg_round+=1;   
+        //             }
+        //         }
+        //         if current_msg_round == self.log.len() /N {
+        //             let mut valid_msg = self.queue.remove(i);
+        //             let start = current_msg_round * N;
+            
+        //             for op in &self.log[start..] {
+        //                 valid_msg = valid_msg.transform(op.clone());
+        //             }
+
+        //             self.log.push(valid_msg);
+        //         }else{
+        //             i+=1;
+        //         }
+        //     }
+        // }else{
+        //     // we ignore the message
+        // }
     }
 }
 
