@@ -90,6 +90,10 @@ impl<const N: usize> Process<N> {
 
         let start = (request.num_applied).min(self.log.len());
         for op in &self.log[start..] {
+
+            if op.process_rank == self.rank {
+                continue;
+            }
             temp_operation = temp_operation.transform(op.clone());
         }
         
@@ -106,42 +110,46 @@ impl<const N: usize> Process<N> {
 #[async_trait::async_trait]
 impl<const N: usize> Handler<Operation> for Process<N> {
     async fn handle(&mut self, msg: Operation) {
+        if msg.process_rank == self.rank {
+            return;
+        }
+
         let mut msg_round = 0;
         let my_round = self.log.len() / N;
         for l in &self.log {
-            if msg.process_rank == l.process_rank{
-                msg_round+=1;
+            if msg.process_rank == l.process_rank {
+                msg_round += 1;
             }
         }
 
         if msg_round > my_round {
             self.queue.push(msg);
         } else if msg_round == my_round {
-            // --- POPRAWKA: AUTONOMICZNY NOP ---
-            // Sprawdzamy, czy to początek rundy. Jeśli tak (log.len % N == 0),
-            // to znaczy, że nie daliśmy jeszcze swojej operacji.
-            // Ponieważ obsługujemy właśnie cudzą operację (msg), musimy najpierw
-            // wygenerować i wysłać nasz NOP, żeby zachować kolejność w logu.
             if self.log.len() % N == 0 {
-                let nop = Operation {
-                    action: Action::Nop,
-                    process_rank: self.rank,
-                };
-                self.log.push(nop.clone());
-                self.broadcast.send(nop).await;
+                if !self.pending_requests.is_empty() {
+                    let req = self.pending_requests.remove(0);
+                    self.perform_edit_request(req).await;
+                } else {
+                    let nop = Operation {
+                        action: Action::Nop,
+                        process_rank: self.rank,
+                    };
+                    self.log.push(nop.clone());
+                    self.broadcast.send(nop.clone()).await;
+                    self.client.send(Edit { action: nop.action }).await;
+                }
             }
-            // ----------------------------------
 
             let mut temp_msg = msg;
-            let start = my_round * N; // Teraz to start może wskazywać na nasz nowo dodany NOP
+            let start = my_round * N;
             
             for op in &self.log[start..] {
                 temp_msg = temp_msg.transform(op.clone());
             }
 
-            self.log.push(temp_msg);
+            self.log.push(temp_msg.clone());
+            self.client.send(Edit { action: temp_msg.action }).await;
 
-            // Obsługa kolejki (tutaj też musimy pamiętać o NOP!)
             let mut i = 0;
             while i < self.queue.len() {
                 let mut current_msg_round = 0;
@@ -153,23 +161,22 @@ impl<const N: usize> Handler<Operation> for Process<N> {
                     }
                 }
 
-                // Sprawdzamy, czy wiadomość z kolejki pasuje do AKTUALNEJ rundy
-                // (która mogła się zmienić przez dodanie poprzednich wiadomości)
                 if current_msg_round == self.log.len() / N {
-                    
-                    // --- POPRAWKA DLA KOLEJKI: AUTONOMICZNY NOP ---
-                    // Ta sama logika: wyciągamy coś z kolejki dla nowej rundy,
-                    // ale jeśli jeszcze nie daliśmy swojego wpisu, robimy NOP.
                     if self.log.len() % N == 0 {
-                        let nop = Operation {
-                            action: Action::Nop,
-                            process_rank: self.rank,
-                        };
-                        self.log.push(nop.clone());
-                        self.broadcast.send(nop).await;
+                         if !self.pending_requests.is_empty() {
+                            let req = self.pending_requests.remove(0);
+                            self.perform_edit_request(req).await;
+                        } else {
+                            let nop = Operation {
+                                action: Action::Nop,
+                                process_rank: self.rank,
+                            };
+                            self.log.push(nop.clone());
+                            self.broadcast.send(nop.clone()).await;
+                            self.client.send(Edit { action: nop.action }).await;
+                        }
                     }
-                    // ---------------------------------------------
-
+                    
                     let mut valid_msg = self.queue.remove(i);
                     let start = current_msg_round * N;
             
@@ -177,12 +184,18 @@ impl<const N: usize> Handler<Operation> for Process<N> {
                         valid_msg = valid_msg.transform(op.clone());
                     }
 
-                    self.log.push(valid_msg);
-                    // Nie inkrementujemy 'i', bo usunęliśmy element i wszystko się przesunęło
+                    self.log.push(valid_msg.clone());
+                    self.client.send(Edit { action: valid_msg.action }).await;
                 } else {
                     i += 1;
                 }
             }
+            
+            if self.log.len() % N == 0 && !self.pending_requests.is_empty() {
+                let req = self.pending_requests.remove(0);
+                self.perform_edit_request(req).await;
+            }
+
         } else {
             // ignore old messages
         }
