@@ -20,7 +20,7 @@ impl Operation {
                 }
             },
             (Action::Delete { idx: i1 }, Action::Insert { idx: i2, ch: _c2 }) => {
-                // Action::Delete { idx: *i1 }
+
                 if i2<=i1 {
                     Action::Delete { idx: *i1+1 }
                 }else{
